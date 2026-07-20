@@ -4,6 +4,10 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pages: write
@@ -14,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -31,12 +37,36 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      - name: Build (Vite)
+        env:
+          CI: true
         run: |
-          npm run build
-          echo "---- Build output: ----"
+          # Try npm build and pass base for GitHub Pages so assets resolve correctly
+          if npm run build -- --base "/${{ github.repository }}"; then
+            echo "Build succeeded"
+          else
+            echo "npm run build failed — attempting direct vite build with explicit outDir and base"
+            npx vite build --outDir dist --base "/${{ github.repository }}"
+          fi
+
+      - name: Show build output
+        run: |
+          echo "---- workspace ----"
           ls -la
+          echo "---- dist (if exists) ----"
           if [ -d dist ]; then ls -la dist || true; du -sh dist || true; fi
+
+      - name: Fallback: create basic static site if dist missing
+        if: ${{ always() }}
+        run: |
+          if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "dist missing or empty — creating fallback from index.html"
+            mkdir -p dist
+            # Copy index and inline a message to avoid referencing /src
+            sed 's#<script type="module" src="/src/main.tsx"></script>#<style>body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:2rem}</style><h1>Site unavailable</h1><p>The app build is not available. Please check Actions logs.</p>#' index.html > dist/index.html || true
+          else
+            echo "dist exists and is non-empty"
+          fi
 
       - name: Configure Pages
         uses: actions/configure-pages@v3
